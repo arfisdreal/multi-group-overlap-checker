@@ -1,0 +1,223 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Roblox Group Overlap Checker</title>
+  <style>
+    :root{--bg:#0f1724;--card:#0b1220;--accent:#7c3aed;--muted:#94a3b8;--glass: rgba(255,255,255,0.03)}
+    html,body{height:100%;margin:0;font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,'Helvetica Neue',Arial}
+    body{background:linear-gradient(180deg,#071022 0%, #071428 60%);color:#e6eef8;padding:28px;box-sizing:border-box}
+    .wrap{max-width:980px;margin:0 auto}
+    .card{background:var(--card);border-radius:14px;padding:18px;box-shadow:0 6px 30px rgba(2,6,23,0.6);border:1px solid rgba(255,255,255,0.03)}
+    h1{margin:0 0 8px;font-size:20px}
+    p.lead{margin:0 0 18px;color:var(--muted)}
+
+    .row{display:flex;gap:10px}
+    .col{flex:1}
+    label{display:block;font-size:12px;color:var(--muted);margin-bottom:6px}
+    input[type=text]{width:100%;padding:10px;border-radius:10px;border:1px solid rgba(255,255,255,0.04);background:var(--glass);color:inherit;font-size:14px}
+    button{padding:10px 14px;border-radius:10px;border:0;background:linear-gradient(90deg,var(--accent),#5b21b6);color:white;font-weight:600;cursor:pointer}
+    button.secondary{background:transparent;border:1px solid rgba(255,255,255,0.04);color:var(--muted)}
+
+    .controls{display:flex;gap:10px;align-items:center}
+    .progress{height:12px;background:rgba(255,255,255,0.03);border-radius:999px;overflow:hidden}
+    .progress > i{display:block;height:100%;width:0;background:linear-gradient(90deg,#7c3aed,#60a5fa);transition:width .2s}
+
+    table{width:100%;border-collapse:collapse;margin-top:12px}
+    th,td{padding:10px 8px;border-bottom:1px solid rgba(255,255,255,0.02);text-align:left;font-size:13px}
+    th{color:var(--muted);font-weight:600;font-size:12px}
+    a{color:#9ad4ff;text-decoration:none}
+
+    .meta{display:flex;gap:12px;flex-wrap:wrap;margin-top:10px}
+    .chip{background:rgba(255,255,255,0.03);padding:8px 10px;border-radius:999px;font-size:13px}
+
+    footer{margin-top:12px;color:var(--muted);font-size:13px}
+
+    @media (max-width:720px){.row{flex-direction:column}.controls{flex-direction:column;align-items:stretch}}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <h1>Roblox Group Overlap Checker</h1>
+      <p class="lead">Enter two Roblox Group IDs and the tool will fetch members from each group and show any overlapping accounts. Uses the public Roblox Groups API — no login required.</p>
+
+      <div class="row">
+        <div class="col">
+          <label for="groupA">Your Group ID</label>
+          <input id="groupA" type="text" placeholder="e.g. 13783772" value="13783772">
+        </div>
+        <div class="col">
+          <label for="groupB">Blacklisted Group ID</label>
+          <input id="groupB" type="text" placeholder="e.g. 12812724" value="12812724">
+        </div>
+      </div>
+
+      <div style="height:12px"></div>
+
+      <div class="controls">
+        <button id="startBtn">Check Overlap</button>
+        <button id="exportBtn" class="secondary" disabled>Export CSV</button>
+        <button id="copyBtn" class="secondary" disabled>Copy IDs</button>
+        <div style="flex:1"></div>
+        <div style="min-width:220px">
+          <label style="font-size:12px;color:var(--muted);margin-bottom:6px;display:block">Progress</label>
+          <div class="progress"><i id="bar"></i></div>
+        </div>
+      </div>
+
+      <div class="meta">
+        <div class="chip">Group A members: <strong id="countA">—</strong></div>
+        <div class="chip">Group B members: <strong id="countB">—</strong></div>
+        <div class="chip">Overlap: <strong id="countBoth">—</strong></div>
+      </div>
+
+      <div id="resultsWrap">
+        <table id="resultsTable" style="display:none">
+          <thead><tr><th>#</th><th>Username</th><th>UserID</th><th>Profile</th></tr></thead>
+          <tbody id="resultsBody"></tbody>
+        </table>
+      </div>
+
+      <footer>
+        Note: If the Roblox API blocks cross-origin requests in your browser, run this file from a local web server (e.g. `python -m http.server`) or host it on a static host (GitHub Pages / Replit). Do NOT paste your Roblox cookie into any third-party site.
+      </footer>
+    </div>
+  </div>
+
+  <script>
+    const startBtn = document.getElementById('startBtn');
+    const exportBtn = document.getElementById('exportBtn');
+    const copyBtn = document.getElementById('copyBtn');
+    const bar = document.getElementById('bar');
+    const countA = document.getElementById('countA');
+    const countB = document.getElementById('countB');
+    const countBoth = document.getElementById('countBoth');
+    const resultsTable = document.getElementById('resultsTable');
+    const resultsBody = document.getElementById('resultsBody');
+
+    function setProgress(p){ bar.style.width = Math.max(0, Math.min(100,p)) + '%'; }
+
+    async function fetchGroupMembers(groupId, onProgress){
+      const members = [];
+      let cursor = null;
+      let fetched = 0;
+      const limit = 100;
+      const base = `https://groups.roblox.com/v1/groups/${groupId}/users?limit=${limit}`;
+
+      while (true){
+        let url = base + (cursor ? `&cursor=${encodeURIComponent(cursor)}` : '');
+        let res;
+        try{
+          res = await fetch(url, {method:'GET'});
+        }catch(e){ throw new Error('Network or CORS error: ' + e.message); }
+
+        if (!res.ok) {
+          const text = await res.text().catch(()=>res.statusText);
+          throw new Error(`Roblox API error ${res.status}: ${text}`);
+        }
+
+        const data = await res.json();
+        if (!Array.isArray(data.data)) break;
+
+        for (const entry of data.data){
+          const u = entry.user || entry; // safety
+          members.push({id: u.userId, username: u.username || u.displayName || ('id:'+u.userId)});
+        }
+
+        fetched += data.data.length;
+        if (onProgress) onProgress(fetched);
+
+        cursor = data.nextPageCursor || null;
+        if (!cursor) break;
+        // small delay to be polite to the API and reduce chance of rate limits
+        await new Promise(r=>setTimeout(r, 300));
+      }
+      return members;
+    }
+
+    function renderResults(list){
+      resultsBody.innerHTML = '';
+      list.forEach((u,idx)=>{
+        const tr = document.createElement('tr');
+        tr.innerHTML = `<td>${idx+1}</td><td>${escapeHtml(u.username)}</td><td>${u.id}</td><td><a href="https://www.roblox.com/users/${u.id}/profile" target="_blank">Open</a></td>`;
+        resultsBody.appendChild(tr);
+      });
+      resultsTable.style.display = list.length ? '' : 'none';
+    }
+
+    function escapeHtml(s){return String(s).replace(/[&<>"']/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]))}
+
+    function toCSV(rows){
+      const hdr = ['username','userid','profile'];
+      const lines = [hdr.join(',')];
+      for (const r of rows) lines.push([`"${r.username.replace(/"/g,'""')}"`,r.id,`https://www.roblox.com/users/${r.id}/profile`].join(','));
+      return lines.join('\n');
+    }
+
+    startBtn.addEventListener('click', async ()=>{
+      const a = document.getElementById('groupA').value.trim();
+      const b = document.getElementById('groupB').value.trim();
+      if (!a || !b){ alert('Please enter both group IDs'); return; }
+      startBtn.disabled = true; exportBtn.disabled = true; copyBtn.disabled = true;
+      resultsBody.innerHTML = ''; resultsTable.style.display='none'; setProgress(0);
+      countA.textContent = '—'; countB.textContent='—'; countBoth.textContent='—';
+
+      try{
+        let progA = 0; let progB = 0; let totalEst = 1;
+        const onProgA = (n)=>{ progA = n; const p = Math.round((progA/(totalEst||1))*60); setProgress(p); };
+        const onProgB = (n)=>{ progB = n; const p = 60 + Math.round((progB/(totalEst||1))*40); setProgress(p); };
+
+        // Start small quick estimate: fetch first page of each to estimate size
+        const quickA = await fetch(`https://groups.roblox.com/v1/groups/${a}/users?limit=1`).then(r=>r.json()).catch(()=>null);
+        const quickB = await fetch(`https://groups.roblox.com/v1/groups/${b}/users?limit=1`).then(r=>r.json()).catch(()=>null);
+        // Note: API doesn't return total count in this endpoint; estimate from subsequent pages isn't straightforward.
+        totalEst = 200; // conservative default to allow progress bar behavior
+
+        const [membersA, membersB] = await Promise.all([
+          fetchGroupMembers(a, onProgA),
+          fetchGroupMembers(b, onProgB)
+        ]);
+
+        countA.textContent = membersA.length;
+        countB.textContent = membersB.length;
+
+        const mapB = new Map();
+        for (const m of membersB) mapB.set(String(m.id), m);
+
+        const overlap = [];
+        for (const m of membersA){
+          if (mapB.has(String(m.id))) overlap.push({id:m.id, username: m.username});
+        }
+
+        countBoth.textContent = overlap.length;
+        renderResults(overlap);
+
+        exportBtn.disabled = overlap.length===0;
+        copyBtn.disabled = overlap.length===0;
+
+        // make export available
+        exportBtn.onclick = ()=>{
+          const csv = toCSV(overlap);
+          const blob = new Blob([csv], {type:'text/csv'});
+          const url = URL.createObjectURL(blob);
+          const ael = document.createElement('a'); ael.href = url; ael.download = `overlap_${a}_${b}.csv`; document.body.appendChild(ael); ael.click(); ael.remove(); URL.revokeObjectURL(url);
+        };
+
+        copyBtn.onclick = async ()=>{
+          const text = overlap.map(o=>`https://www.roblox.com/users/${o.id}/profile`).join('\n');
+          try{ await navigator.clipboard.writeText(text); alert('Copied to clipboard'); }catch(e){ prompt('Copy these links:', text); }
+        };
+
+      }catch(err){
+        alert('Error: ' + err.message);
+        console.error(err);
+      }finally{
+        startBtn.disabled = false;
+        setProgress(100);
+      }
+    });
+  </script>
+</body>
+</html>
